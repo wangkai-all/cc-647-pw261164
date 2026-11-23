@@ -32,3 +32,6 @@ test-results/
 *.sqlite3-shm
 *.sqlite3-journal
 !*.traineddata.gz
+
+# Evaluation harness writes a fully-matured copy of the demo data.
+data/.truth.csv

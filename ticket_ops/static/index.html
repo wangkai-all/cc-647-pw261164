@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工单发生量估计</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-palette="#2a78d6,#eb6834">
+<div class="viz-root" id="root">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">工单运营 · 发生量估计</p>
+      <h1>把还没报上来的工单补回来</h1>
+      <p class="lede">
+        历史完整批次用来估计各渠道的<strong>上报延迟分布</strong>，再把观察截止日之前真正看得见的数量送进<strong>非负反推模型</strong>，
+        估计最近各日尚未报齐的发生量。渠道分开拟合，数量最后汇总；未成熟批次不参与延迟训练。
+      </p>
+    </div>
+    <div class="cutoff-card">
+      <span class="cutoff-label">观察截止日</span>
+      <span class="cutoff-date" id="cutoff-date">—</span>
+      <span class="cutoff-note" id="cutoff-note"></span>
+    </div>
+  </header>
+
+  <section class="controls" aria-label="筛选与调节">
+    <div class="control">
+      <label for="channel-select">渠道</label>
+      <select id="channel-select">
+        <option value="__all__">全部渠道汇总</option>
+      </select>
+    </div>
+    <div class="control">
+      <label for="window-range">拟合窗口（发生日天数）</label>
+      <input type="range" id="window-range" min="7" max="60" step="1" value="28">
+      <output id="window-value" for="window-range">28</output>
+    </div>
+    <div class="control">
+      <label for="smooth-range">平滑程度</label>
+      <input type="range" id="smooth-range" min="0" max="20" step="0.05" value="0.05">
+      <output id="smooth-value" for="smooth-range">0.05</output>
+      <span class="control-hint">0 = 不平滑，越大越平滑；非负约束始终在求解内生效</span>
+    </div>
+    <div class="control control-actions">
+      <button type="button" id="replay-button">回放比较</button>
+      <span class="control-hint" id="replay-status"></span>
+    </div>
+  </section>
+
+  <section class="tiles" id="tiles" aria-label="关键数字"></section>
+
+  <section class="card" id="main-card">
+    <div class="card-head">
+      <div>
+        <h2>发生量：原始上报、估计发生与回推上报</h2>
+        <p class="subtitle" id="main-subtitle"></p>
+      </div>
+      <ul class="legend" id="main-legend" aria-label="图例"></ul>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="main-chart" role="img" aria-label="原始上报曲线、估计发生曲线与回推上报曲线"></canvas>
+      <div class="chart-tooltip" id="main-tooltip" hidden></div>
+    </div>
+    <p class="chart-readout" id="main-readout" aria-live="polite">点选图中任意一天，查看它受哪些延迟段影响。</p>
+    <div class="table-toggle">
+      <button type="button" id="main-table-btn" aria-expanded="false">查看数据表</button>
+    </div>
+    <div class="table-view" id="main-table" hidden></div>
+  </section>
+
+  <section class="split">
+    <article class="card" id="delay-card">
+      <div class="card-head">
+        <div>
+          <h2>延迟分布 <span class="chip" id="delay-channel-chip"></span></h2>
+          <p class="subtitle" id="delay-subtitle"></p>
+        </div>
+      </div>
+      <div class="chart-wrap chart-wrap-short">
+        <canvas id="delay-chart" role="img" aria-label="上报延迟分布"></canvas>
+        <div class="chart-tooltip" id="delay-tooltip" hidden></div>
+      </div>
+      <div class="table-toggle">
+        <button type="button" id="delay-table-btn" aria-expanded="false">查看数据表</button>
+      </div>
+      <div class="table-view" id="delay-table" hidden></div>
+    </article>
+
+    <article class="card" id="day-card">
+      <div class="card-head">
+        <div>
+          <h2>单日拆解</h2>
+          <p class="subtitle" id="day-subtitle">选择一天，查看已上报与估计未上报如何按时滞构成。</p>
+        </div>
+      </div>
+      <div class="chart-wrap chart-wrap-short">
+        <canvas id="day-chart" role="img" aria-label="单日延迟拆解"></canvas>
+        <div class="chart-tooltip" id="day-tooltip" hidden></div>
+      </div>
+      <div class="table-toggle">
+        <button type="button" id="day-table-btn" aria-expanded="false">查看数据表</button>
+      </div>
+      <div class="table-view" id="day-table" hidden></div>
+    </article>
+  </section>
+
+  <section class="card" id="warnings-card">
+    <div class="card-head">
+      <div>
+        <h2>稳定性警告</h2>
+        <p class="subtitle">变慢、停报、历史未覆盖的延迟都会被标出，并转成对应的不确定范围。</p>
+      </div>
+    </div>
+    <div class="warning-list" id="warning-list"></div>
+  </section>
+
+  <section class="card" id="replay-card">
+    <div class="card-head">
+      <div>
+        <h2>回放检验</h2>
+        <p class="subtitle">
+          用更早的截止日重新估计，只能使用当时已成熟的历史；再与后来真正成熟的值比较。
+          只评估当时尚未报齐、如今已成熟的发生日。比较基准是这些发生日到当前截止日为止的累计上报量——
+          永久丢失的上报会计为模型误差，不会被悄悄抹去。
+        </p>
+      </div>
+      <div class="table-toggle"><button type="button" id="replay-table-btn" aria-expanded="false">查看数据表</button></div>
+    </div>
+    <div class="replay-body" id="replay-body">
+      <p class="placeholder">还没有回放结果。点击上方的“回放比较”。</p>
+    </div>
+    <div class="table-view" id="replay-table" hidden></div>
+  </section>
+
+  <section class="card" id="method-card">
+    <div class="card-head">
+      <div>
+        <h2>口径与方法</h2>
+        <p class="subtitle">页面上的每个数字都能追溯到下面这条链路。</p>
+      </div>
+    </div>
+    <ol class="method-list">
+      <li><strong>按渠道分开拟合。</strong>每个渠道各自训练延迟分布、各自反推发生量，最后才把数量相加。没有先把渠道混成一个平均延迟。</li>
+      <li><strong>成熟历史才进训练。</strong>只有截止日往前至少一个完整时滞窗口的发生日才参与延迟训练；未成熟批次一律不回流。</li>
+      <li><strong>非负反推。</strong>约束是 <em>已观察数量 + 未知未上报 ≥ 0</em>，解由非负最小二乘直接给出，不存在“先解线性模型再把负数截零”的步骤。</li>
+      <li><strong>平滑可调。</strong>平滑权重作用在发生曲线的一阶差分上；调大后模型误差（RMSE）会如实变差，不会被隐藏。默认值按回放校准选取：在平滑 0、0.05、0.3、5 的对比中取 90% 区间实际覆盖率接近名义水平的一档。</li>
+      <li><strong>不确定范围。</strong>来自对成熟训练日与观察计数的自举重采样，并叠加平滑参数相邻取值的敏感性，取更宽者。</li>
+      <li><strong>缺口与超长延迟。</strong>停报日与超出训练时滞的延迟会把受影响发生日降级为下界，并放宽其上界。</li>
+    </ol>
+  </section>
+
+  <footer class="page-foot">
+    <span id="foot-meta"></span>
+  </footer>
+</div>
+<script src="vendor/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
